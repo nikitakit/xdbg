@@ -138,7 +138,7 @@ class Debugger():
         # Need to continue the main kernel loop without returning from here
         try:
             while not frame['has_returned']:
-                  self.shell.get_ipython().kernel.do_one_iteration()
+                self.shell.get_ipython().kernel.do_one_iteration()
             return frame['return_value']
         except:
             raise
