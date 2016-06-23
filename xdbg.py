@@ -2,9 +2,34 @@ import inspect
 from IPython.core.interactiveshell import InteractiveShell
 from IPython.core.inputtransformer import StatelessInputTransformer
 from IPython.core.splitinput import LineInfo
+from exec_scope import ExecScope
+import ast
 import types
 
 __all__ = ["Debugger"]
+
+class ReturnRewriter(ast.NodeTransformer):
+    def __init__(self, debugger):
+        self.debugger = debugger
+
+    def visit_FunctionDef(self, node):
+        return node
+
+    def visit_AsyncFunctionDef(self, node):
+        return node
+
+    def visit_ClassDef(self, node):
+        return node
+
+    def visit_Return(self, node):
+        expr_args = self.debugger.get_return_call_ast()
+        if expr_args is None:
+            return node
+        else:
+            expr, args = expr_args
+            if node.value is not None:
+                args.append(node.value)
+            return expr
 
 class Debugger():
     def __init__(self):
@@ -19,27 +44,8 @@ class Debugger():
         self.quasimagics = {}
         self.quasimagics['break'] = '_break_handler'
 
-
         # Initialize the return handler
-        for transforms_list in [
-            self.shell.input_transformer_manager.python_line_transforms,
-            self.shell.input_splitter.python_line_transforms,
-                ]:
-            to_remove = []
-            for x in transforms_list:
-                try:
-                    if x.func.__name__  == 'create_return_handler':
-                        to_remove.append(x)
-                except:
-                    # Most likely the transform was not created using the provided
-                    # decorators
-                    pass
-            for x in to_remove:
-                transforms_list.remove(x)
-
-        self.return_handler = StatelessInputTransformer.wrap(self.create_return_handler)()
-        self.shell.input_splitter.python_line_transforms.append(self.return_handler)
-        self.shell.input_transformer_manager.python_line_transforms.append(self.return_handler)
+        self.shell.ast_transformers.append(ReturnRewriter(self))
 
         # Initialize the quasi-magic handler
         for transforms_list in [
@@ -81,27 +87,22 @@ class Debugger():
             return lineinf.pre + getattr(self, self.quasimagics[lineinf.ifun])(lineinf)
         return line
 
-    def create_return_handler(self, line):
-        lineinf = LineInfo(line)
-        if lineinf.esc == "" and lineinf.ifun == "return":
-            return_function = self.get_return_function()
-            if return_function:
-                return lineinf.pre + return_function + '(' + lineinf.the_rest + ')'
-        return line
-
     def _break_handler(self, lineinf):
         if not lineinf.the_rest:
             return "return get_ipython()._debugger.enter_frame(globals(), locals())"
         else:
             return "{val} = get_ipython()._debugger.replace_with_proxy({val})".format(val=lineinf.the_rest)
 
-    def get_return_function(self):
-        if self.frames:
-            return 'get_ipython()._debugger.exit_frame'
-        else:
+    def get_return_call_ast(self):
+        if not self.frames:
             return None
+        module = ast.parse('get_ipython()._debugger.exit_frame(1)')
+        expr = module.body[0]
+        args = module.body[0].value.args
+        args.pop()
+        return expr, args
 
-    def enter_frame(self, globals_dict, locals_dict, frame_name=None):
+    def enter_frame(self, globals_dict, locals_dict, frame_name=None, closure_dict=None):
         if not globals_dict == self.shell.user_global_ns:
             print("Failed to enter frame with wrong globals")
             return
@@ -119,7 +120,13 @@ class Debugger():
             'locals': locals_dict,
             'has_returned': False,
             'return_value': None,
+            'exec_scope': ExecScope(globals_dict,
+                locals_dict,
+                shell=self.shell,
+                closure_dict=closure_dict),
+            'old_run_ast_nodes': self.shell.run_ast_nodes,
         }
+
         if frame_name is None:
             try:
                 stack = inspect.stack()
@@ -133,7 +140,13 @@ class Debugger():
         self.shell.user_ns = frame['locals']
 
         print('[DBG] Entered:', frame['frame_name'])
+        if closure_dict is None and inspect.currentframe().f_back.f_code.co_freevars:
+            # There's no reliable way to get closure info at runtime... but,
+            # the %break obj syntax that creates proxy objects can get closure
+            # info
+            print('[DBG] Warning: nonlocals copied by value')
         self.shell.execution_count += 1 # Needed to keep ID's unique
+        self.shell.run_ast_nodes = frame['exec_scope'].shell_substitute_run_ast_nodes
 
         # Need to continue the main kernel loop without returning from here
         try:
@@ -144,20 +157,21 @@ class Debugger():
             raise
         finally:
             print('[DBG] Exited:', frame['frame_name'])
+            self.shell.run_ast_nodes = frame['old_run_ast_nodes']
             self.shell.user_ns = frame['old_locals']
 
-    def exit_frame(self, val=None, *args):
+    def exit_frame(self, val=None):
         frame = self.frames.pop()
-        if not args:
-            frame['return_value'] = val
-        else:
-            frame['return_value'] = (val,) + args
+        frame['return_value'] = val
         frame['has_returned'] = True
 
     def replace_with_proxy(self, func):
         if not isinstance(func, (types.FunctionType, types.MethodType)):
             raise ValueError("Can only break on functions or methods")
         sig = inspect.signature(func)
+        closure_dict = {}
+        if func.__code__.co_freevars:
+            closure_dict = dict(zip(func.__code__.co_freevars, func.__closure__))
         def proxy(*args, **kwargs):
             bound_arguments = sig.bind(*args, **kwargs)
             bound_arguments.apply_defaults()
@@ -172,7 +186,10 @@ class Debugger():
                     # TODO: fix behavior for methods that incorrectly fail to take
                     # self as an argument
                     pass
-            return self.enter_frame(func.__globals__, locals_dict, frame_name=func.__name__)
+            return self.enter_frame(func.__globals__,
+                    locals_dict,
+                    frame_name=func.__name__,
+                    closure_dict=closure_dict)
         proxy.__dict__ = func.__dict__
         proxy.__name__ = func.__name__
         proxy.__qualname__ = func.__qualname__
