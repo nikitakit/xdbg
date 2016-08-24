@@ -18,7 +18,7 @@ It is best used in combination with the [deuterium package](https://github.com/n
 
 ### To Install
 
-`xdbg` is a valid package because it has an `__init__.py`. At the moment it must be manually imported. Packages for `xdbg` are a work in progress.
+Use the `setup.py` provided in this repository, or run `pip install git+https://github.com/nikitakit/xdbg`
 
 ## Limitations
 New features coming soon...
