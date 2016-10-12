@@ -82,7 +82,12 @@ class Debugger():
             raise ValueError("Can't create a second Debugger, use Debugger.get_instance() instead")
         self.shell._debugger = self
 
+        # Set up a comm for our current frontend
+        # If the frontend is reloaded in the future, register a comm target so
+        # the frontend can replace our comm instance
+        # TODO: support multiple simultaneous comms
         self.comm = Comm(target_name="xdbg")
+        self.shell.kernel.comm_manager.register_target("xdbg", self.change_comm)
 
         self.frames = []
         self.frames.append({
@@ -130,6 +135,11 @@ class Debugger():
             shell._debugger = Debugger()
 
         return shell._debugger
+
+    def change_comm(self, comm, msg):
+        if self.comm is not None and self.comm is not comm:
+            self.comm.close()
+        self.comm = comm
 
     def import_module(self, name):
         """
