@@ -18,7 +18,7 @@ It is best used in combination with the [hydrogen package](https://github.com/nt
 
 ### To Install
 
-Use the `setup.py` provided in this repository, or run `pip install git+https://github.com/nikitakit/xdbg`
+Run `pip install git+https://github.com/nikitakit/xdbg` (or clone the repository and use `setup.py`)
 
 ## Limitations
 New features coming soon...
