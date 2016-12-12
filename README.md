@@ -3,7 +3,7 @@ See http://kitaev.io/xdbg for more details.
 
 `xdbg` provides advanced live coding for Python.
 
-It is best used in combination with the [deuterium package](https://github.com/nikitakit/deuterium) for the Atom text editor.
+It is best used in combination with the [hydrogen package](https://github.com/nteract/hydrogen) and [hydrogen-xdbg plugin](https://github.com/nikitakit/hydrogen-xdbg) for the Atom text editor.
 
 ## Features
 `xdbg` extends IPython to allow executing live code at any scope within the running program, including:
