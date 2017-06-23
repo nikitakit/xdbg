@@ -46,7 +46,18 @@ class DebuggerMagics(Magics):
 
     @line_magic
     def scope(self, line):
-        self.debugger.frame_tracker.enter_module(self.lookup_module(line))
+        module = None
+        if not line or line == '__main__':
+            module = self.debugger.frame_tracker.main_module
+        elif line.endswith('.py'):
+            module = self.lookup_module(line)
+        elif line in sys.modules:
+            module = sys.modules[line]
+
+        if module is not None:
+            self.debugger.frame_tracker.enter_module(module)
+        else:
+            print("Scope not found", file=sys.stderr)
 
 class Debugger():
     instance = None
