@@ -26,7 +26,6 @@ New features coming soon...
 * Allow live-editing modules while execution is paused inside a function
 
 Known issues:
-* `%break ARG` is temporarily broken
 * `%break` with no arguments is not useful at module scope
 
 Wishlist

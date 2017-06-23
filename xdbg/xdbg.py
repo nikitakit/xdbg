@@ -287,7 +287,8 @@ class Debugger():
                     # TODO: fix behavior for methods that incorrectly fail to take
                     # self as an argument
                     pass
-            return self.enter_frame(func.__globals__,
+            return self.enter_frame(
+                    func.__module__,
                     locals_dict,
                     frame_name=func.__name__,
                     closure_dict=closure_dict)
