@@ -95,7 +95,7 @@ class FrameTracker():
         self.shell.user_ns = module.__dict__
         self.comm.send(data={'scope': module.__name__})
 
-    def enter_frame(self, module_name, locals_dict, frame_name=None, closure_dict=None):
+    def enter_frame(self, module_name, locals_dict, frame_name=None, closure_dict=None, stack_skip=1):
         if '_oh' not in locals_dict:
             locals_dict['_oh'] = {}
 
@@ -126,7 +126,7 @@ class FrameTracker():
         if frame_name is None:
             try:
                 stack = inspect.stack()
-                frame_name = '<{}>.{}'.format(module_name, stack[1].function)
+                frame_name = '<{}>.{}'.format(module_name, stack[stack_skip].function)
                 frame['frame_name'] = frame_name
             except:
                 pass
@@ -138,7 +138,7 @@ class FrameTracker():
         self.shell.user_ns = frame['locals']
 
         print('[xdbg] Entered:', frame['frame_name'])
-        if closure_dict is None and inspect.currentframe().f_back.f_code.co_freevars:
+        if closure_dict is None and stack[stack_skip].frame.f_code.co_freevars:
             # There's no reliable way to get closure info at runtime... but,
             # the %break obj syntax that creates proxy objects can get closure
             # info
