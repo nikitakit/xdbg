@@ -1,16 +1,10 @@
 from .xdbg import Debugger
+import sys
 
-error = None
-try:
-    get_ipython().kernel
-except NameError:
-    error = "xdbg must be run inside an IPython kernel"
-except AttributeError:
-    error = "xdbg must be run inside an IPython kernel. A running IPython instance was found, but it does not appear to have an associated kernel"
+def load_ipython_extension(ipython):
+    ipython.xdbg = Debugger(ipython)
 
-if error is not None:
-    raise ImportError(error)
+def unload_ipython_extension(ipython):
+    print("WARNING: unloading xdbg is not implemented", file=sys.stderr)
 
-debugger = Debugger(get_ipython())
-
-__all__ = ['debugger']
+__all__ = ['load_ipython_extension', 'unload_ipython_extension']

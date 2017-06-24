@@ -32,6 +32,7 @@ class ReturnRewriter(ast.NodeTransformer):
 class FrameTracker():
     def __init__(self, shell):
         self.shell = shell
+        self.using_kernel = hasattr(self.shell, 'kernel')
         self.main_module = self.shell.user_module
         if hasattr(self.shell, '_xdbg_frame_tracker'):
             raise ValueError("Can't create a second FrameTracker, use shell._xdbg_frame_tracker instead")
@@ -127,8 +128,16 @@ class FrameTracker():
 
         # Need to continue the main kernel loop without returning from here
         try:
-            while not frame['has_returned']:
-                self.shell.get_ipython().kernel.do_one_iteration()
+            if self.using_kernel:
+                while not frame['has_returned']:
+                    self.shell.kernel.do_one_iteration()
+            else:
+                # The kernel-less IPython shell doesn't expose do_one_iteration,
+                # so an alternative codepath is needed
+                self.shell.interact()
+                if frame['has_returned']:
+                    self.shell.keep_running = True
+
             return frame['return_value']
         except:
             raise
@@ -143,3 +152,5 @@ class FrameTracker():
         frame = self.frames.pop()
         frame['return_value'] = val
         frame['has_returned'] = True
+        if not self.using_kernel:
+            self.shell.keep_running = False
