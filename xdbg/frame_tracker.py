@@ -1,7 +1,6 @@
 import inspect
 import sys, os
 from IPython.core.interactiveshell import InteractiveShell
-from ipykernel.comm.comm import Comm
 from .exec_scope import ExecScope
 import ast
 import types
@@ -31,19 +30,12 @@ class ReturnRewriter(ast.NodeTransformer):
             return expr
 
 class FrameTracker():
-    def __init__(self):
-        self.shell = get_ipython()
+    def __init__(self, shell):
+        self.shell = shell
         self.main_module = self.shell.user_module
         if hasattr(self.shell, '_xdbg_frame_tracker'):
-            raise ValueError("Can't create a second FrameTracker, use FrameTracker.get_instance() instead")
+            raise ValueError("Can't create a second FrameTracker, use shell._xdbg_frame_tracker instead")
         self.shell._xdbg_frame_tracker = self
-
-        # Set up a comm for our current frontend
-        # If the frontend is reloaded in the future, register a comm target so
-        # the frontend can replace our comm instance
-        # TODO: support multiple simultaneous comms
-        self.comm = Comm(target_name="xdbg")
-        self.shell.kernel.comm_manager.register_target("xdbg", self.change_comm)
 
         self.frames = []
         self.frames.append({
@@ -55,20 +47,6 @@ class FrameTracker():
         # Initialize the return handler
         self.shell.ast_transformers.append(ReturnRewriter(self))
 
-    @staticmethod
-    def get_instance():
-        shell = get_ipython()
-        if not hasattr(shell, '_xdbg_frame_tracker'):
-            frame_tracker = FrameTracker()
-            assert shell._xdbg_frame_tracker == frame_tracker
-
-        return shell._xdbg_frame_tracker
-
-    def change_comm(self, comm, msg):
-        if self.comm is not None and self.comm is not comm:
-            self.comm.close()
-        self.comm = comm
-
     def get_return_call_ast(self):
         if not self.frames or self.frames[-1]['temporary']:
             return None
@@ -77,6 +55,9 @@ class FrameTracker():
         args = module.body[0].value.args
         args.pop()
         return expr, args
+
+    def eval(self, source):
+        return eval(source, self.shell.user_module.__dict__, self.shell.user_ns)
 
     def enter_module(self, module):
         if not self.frames or not self.frames[-1]['temporary']:
@@ -93,7 +74,6 @@ class FrameTracker():
             module._oh = {}
         self.shell.user_module = module
         self.shell.user_ns = module.__dict__
-        self.comm.send(data={'scope': module.__name__})
 
     def enter_frame(self, module_name, locals_dict, frame_name=None, closure_dict=None, stack_skip=1):
         if '_oh' not in locals_dict:
@@ -130,7 +110,6 @@ class FrameTracker():
                 frame['frame_name'] = frame_name
             except:
                 pass
-        self.comm.send(data={'scope': frame_name})
 
         self.frames.append(frame)
 
@@ -158,8 +137,6 @@ class FrameTracker():
             self.shell.run_ast_nodes = frame['old_run_ast_nodes']
             self.shell.user_module = frame['old_module']
             self.shell.user_ns = frame['old_locals']
-            if self.frames:
-                self.comm.send(data={'scope': self.frames[-1]['frame_name']})
 
 
     def exit_frame(self, val=None):

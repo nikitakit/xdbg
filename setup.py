@@ -7,9 +7,10 @@ if sys.version_info < (3, 5):
 
 setup(
     name = "xdbg",
-    version = "0.1",
+    version = "0.2",
     packages = find_packages(),
     install_requires=[
-        "ipython"
+        "ipython",
+        "byteplay3",
     ]
 )

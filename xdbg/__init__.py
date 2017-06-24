@@ -11,6 +11,6 @@ except AttributeError:
 if error is not None:
     raise ImportError(error)
 
-debugger = Debugger.get_instance()
+debugger = Debugger(get_ipython())
 
 __all__ = ['debugger']

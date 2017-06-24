@@ -6,105 +6,119 @@ from IPython.core.splitinput import LineInfo
 from IPython.core.magic import (Magics, magics_class, line_magic,
                                 cell_magic, line_cell_magic)
 from .frame_tracker import FrameTracker
+from .breakpoint_hooks import BaseBreakpointTable, add_breakpoint, materialize_breakpoints
 import ast
 import types
 import importlib
 
-@magics_class
-class DebuggerMagics(Magics):
-    def __init__(self, shell, debugger):
-        super().__init__(shell)
+def error(*args, **kwargs):
+    print(*args, **kwargs, file=sys.stderr)
+
+class BreakpointTable(BaseBreakpointTable):
+    def __init__(self, debugger):
         self.debugger = debugger
-        self.update_modules()
+        self.counter = 0
+        self.b_names = {}
+        self.b_enabled = {}
+        self.b_temporary = {}
+        self.b_ignore_count = {}
 
-    def update_modules(self):
-        self.filename_to_module = {}
-        for module in sys.modules.values():
-            try:
-                filename = inspect.getfile(module)
-            except TypeError:
-                continue # Module has no file
-            self.filename_to_module[filename] = module
+    def new_breakpoint(self, func, lineno):
+        num = self.counter
+        self.counter += 1
 
-    def lookup_module(self, filename):
-        filename = os.path.expanduser(os.path.expandvars(filename))
-        for prefix, alternative in self.debugger.path_mapping.items():
-            prefix = os.path.expanduser(os.path.expandvars(prefix))
-            alternative = os.path.expanduser(os.path.expandvars(alternative))
-            try:
-                if os.path.commonpath([filename, prefix]) == os.path.commonpath([prefix]):
-                    rel_filename = os.path.relpath(filename, prefix)
-                    filename = os.path.join(alternative, rel_filename)
-            except ValueError:
-                pass
+        self.b_names[num] = "{}:{}".format(func.__name__, lineno)
+        self.b_enabled[num] = True
+        self.b_temporary[num] = False
+        self.b_ignore_count[num] = 0
 
-        if filename not in self.filename_to_module:
-            self.update_modules()
-            if filename not in self.filename_to_module:
-                return self.debugger.frame_tracker.main_module
-        return self.filename_to_module[filename]
+        return num
+
+    def remove_breakpoint(self, num):
+        del self.b_names[num]
+        del self.b_enabled[num]
+        del self.b_temporary[num]
+        del self.b_ignore_count[num]
+
+    def list_breakpoints(self):
+        res = []
+        for num in sorted(self.b_names.keys()):
+            res.append((num, self.b_names[num], self.b_enabled[num], self.b_temporary[num], self.b_ignore_count[num]))
+        return res
+
+    def modify_breakpoints(self, breakpoints, enabled=None, temporary=None, ignore_count=None):
+        for num in breakpoints:
+            assert num in self.b_names
+            if enabled is not None:
+                self.b_enabled[num] = enabled
+            if temporary is not None:
+                self.b_temporary[num] = temporary
+            if ignore_count is not None:
+                self.b_ignore_count[num] = ignore_count
+
+    def breakpoint_exists(self, num):
+        return num in self.b_names
+
+    def __call__(self, num, module_name, locals_dict):
+        """
+        Called whenever a breakpoint is hit.
+        Returns a tuple (do_return, return_value)
+        """
+        if not self.b_enabled.get(num, False):
+            return False, None
+
+        old_ignore_count = self.b_ignore_count[num]
+        self.b_ignore_count[num] = max(0, old_ignore_count - 1)
+        if old_ignore_count > 0:
+            return False, None
+
+        res = self.debugger.frame_tracker.enter_frame(module_name, locals_dict, stack_skip=2)
+        if self.b_temporary[num]:
+            self.remove_breakpoint(num)
+
+        return True, res
+
+@magics_class
+class Debugger(Magics):
+    def __init__(self, shell):
+        super().__init__(shell)
+        # self.shell is set by super
+
+        self.frame_tracker = FrameTracker(self.shell)
+        self.breakpoint_table = BreakpointTable(self)
+
+        # Initialize magics
+        self.path_mapping = {}
+        self.shell.register_magics(self)
+
+    @property
+    def main_module():
+        return self.frame_tracker.main_module
+
+    def print_breakpoints(self, enabled=None):
+        breakpoints = self.breakpoint_table.list_breakpoints()
+        if not breakpoints:
+            print('No breakpoints')
+            return
+
+        if enabled is not None:
+            breakpoints = [b for b in breakpoints if b[2] == enabled]
+            if not breakpoints:
+                if enabled:
+                    print('No breakpoints are enabled')
+                else:
+                    print('No breakpoints are disabled')
+                return
+
+        print("Breakpoints:")
+        for num, b_name, b_enabled, b_temporary, b_ignore_count in breakpoints:
+            print('{}\t{}\t'.format(num, b_name),
+                  '   ' if b_enabled else 'dis',
+                  '(ign {})'.format(b_ignore_count) if b_ignore_count > 0 else '',
+                  '(temp)' if b_temporary else '')
 
     @line_magic
-    def scope(self, line):
-        module = None
-        if not line or line == '__main__':
-            module = self.debugger.frame_tracker.main_module
-        elif line.endswith('.py'):
-            module = self.lookup_module(line)
-        elif line in sys.modules:
-            module = sys.modules[line]
-
-        if module is not None:
-            self.debugger.frame_tracker.enter_module(module)
-        else:
-            print("Scope not found", file=sys.stderr)
-
-class Debugger():
-    instance = None
-
-    def __init__(self):
-        Debugger.instance = self
-
-        self.shell = get_ipython()
-        self.frame_tracker = FrameTracker.get_instance()
-
-        # Initialize the quasimagics dictionary
-        self.quasimagics = {}
-        self.quasimagics['break'] = '_break_handler'
-
-        # Initialize the quasi-magic handler
-        for transforms_list in [
-            self.shell.input_transformer_manager.logical_line_transforms,
-            self.shell.input_splitter.logical_line_transforms,
-                ]:
-            to_remove = []
-            for x in transforms_list:
-                try:
-                    if x.func.__name__  == 'create_quasimagic_handler':
-                        to_remove.append(x)
-                except:
-                    # Most likely the transform was not created using the provided
-                    # decorators
-                    pass
-            for x in to_remove:
-                transforms_list.remove(x)
-        self.quasimagic_handler = StatelessInputTransformer.wrap(self.create_quasimagic_handler)()
-        self.shell.input_transformer_manager.logical_line_transforms.insert(0, self.quasimagic_handler)
-        self.shell.input_splitter.logical_line_transforms.insert(0, self.quasimagic_handler)
-
-        # Initialize real magics
-        self.path_mapping = {}
-        self.magics = DebuggerMagics(self.shell, self)
-        self.shell.register_magics(self.magics)
-
-    @staticmethod
-    def get_instance():
-        if Debugger.instance is None:
-            Debugger.instance = Debugger()
-
-        return Debugger.instance
-
-    def import_module(self, name):
+    def makescope(self, name):
         """
         Import a module without running the code inside
         """
@@ -113,52 +127,111 @@ class Debugger():
         spec = importlib.util.find_spec(name)
         sys.modules[name] = importlib.util.module_from_spec(spec)
 
-    def create_quasimagic_handler(self, line):
-        """
-        Handler for the quasi-magic %break.
+    @line_magic
+    def scope(self, line):
+        # TODO(nikita): do I want %scope to accept import specifiers, or names
+        # of global variables?
 
-        It needs access to locals() from the correct frame, so for now it's
-        implemented as its own input transformer.
-        """
-        lineinf = LineInfo(line)
-        if lineinf.esc == '%' and lineinf.ifun in self.quasimagics:
-            return lineinf.pre + getattr(self, self.quasimagics[lineinf.ifun])(lineinf)
-        return line
+        if line.endswith('.py'):
+            return error("Scope accepts module names, not file paths")
 
-    def _break_handler(self, lineinf):
-        if not lineinf.the_rest:
-            return "return get_ipython()._xdbg_frame_tracker.enter_frame(__name__, locals())"
+        if not line or line == "__main__":
+            self.frame_tracker.enter_module(self.main_module)
+        elif line in sys.modules:
+            self.frame_tracker.enter_module(sys.modules[line])
         else:
-            return "{val} = get_ipython()._xdbg_frame_tracker.replace_with_proxy({val})".format(val=lineinf.the_rest)
+            return error("Module not found: {}".format(line))
 
-    def replace_with_proxy(self, func):
-        if not isinstance(func, (types.FunctionType, types.MethodType)):
-            raise ValueError("Can only break on functions or methods")
-        sig = inspect.signature(func)
-        closure_dict = {}
-        if func.__code__.co_freevars:
-            closure_dict = dict(zip(func.__code__.co_freevars, func.__closure__))
-        def proxy(*args, **kwargs):
-            bound_arguments = sig.bind(*args, **kwargs)
-            bound_arguments.apply_defaults()
-            locals_dict = dict(bound_arguments.arguments)
-            if isinstance(func, types.MethodType):
+    @line_magic('break')
+    def break_(self, args, temporary=False):
+        args = args.split()
+
+        if len(args) == 0:
+            self.print_breakpoints()
+        elif len(args) > 2:
+            return error("Syntax: %break [func [lineno]]")
+        else:
+            try:
+                func = self.frame_tracker.eval(args[0])
+            except:
+                return error("Not found: {}".format(args[0]))
+
+            if len(args) == 1:
+                num = add_breakpoint(self.breakpoint_table, func)
+                self.breakpoint_table.modify_breakpoints([num], temporary=temporary)
+                print('New breakpoint', num)
+            elif len(args) == 2:
                 try:
-                    # First parameter is typically named 'self', but python does not
-                    # inforce this
-                    self_name = list(inspect.signature(func.__func__).parameters.keys())[0]
-                    locals_dict[self_name] = func.__self__
-                except:
-                    # TODO: fix behavior for methods that incorrectly fail to take
-                    # self as an argument
-                    pass
-            return self.frame_tracker.enter_frame(
-                    func.__module__,
-                    locals_dict,
-                    frame_name=func.__name__,
-                    closure_dict=closure_dict)
-        proxy.__dict__ = func.__dict__
-        proxy.__name__ = func.__name__
-        proxy.__qualname__ = func.__qualname__
-        proxy._func = func
-        return proxy
+                    lineno = int(args[1])
+                except ValueError:
+                    lineno = '?'
+
+                if lineno == '?':
+                    lines, starting_lineno = inspect.getsourcelines(func)
+                    for line, i in zip(lines, range(starting_lineno, starting_lineno + len(lines))):
+                        print('{}  '.format(i), line, end='')
+                    print()
+                else:
+                    add_breakpoint(self.breakpoint_table, func, lineno)
+                    self.breakpoint_table.modify_breakpoints([num], temporary=temporary)
+                    print('New breakpoint', num)
+
+    @line_magic
+    def tbreak(self, args):
+        return self.break_(args, temporary=True)
+
+    def modify_breakpoints(self, args, enabled=None):
+        if not args or args == '?':
+            self.print_breakpoints(enabled=(None if enabled is None else (not enabled)))
+            return
+
+        breakpoints = args.split()
+        for i, breakpoint in enumerate(breakpoints):
+            try:
+                breakpoint = int(breakpoint)
+            except ValueError:
+                return error("Invalid breakpoint number:", breakpoint)
+
+            if not self.breakpoint_table.breakpoint_exists(breakpoint):
+                return error("Invalid breakpoint number:", breakpoint)
+            breakpoints[i] = breakpoint
+
+        self.breakpoint_table.modify_breakpoints(breakpoints, enabled=enabled)
+        print("Modified:", *breakpoints)
+
+    @line_magic
+    def enable(self, args):
+        self.modify_breakpoints(args, enabled=True)
+
+    @line_magic
+    def disable(self, args):
+        self.modify_breakpoints(args, enabled=False)
+
+    @line_magic
+    def ignore(self, args):
+        args = args.split()
+        if not args or len(args) > 2:
+            return error("Syntax: %ignore bpnumber [count]")
+
+        if args[0] == '?':
+            self.print_breakpoints()
+            return
+
+        try:
+            args = [int(x) for x in args]
+        except ValueError:
+            return error("Syntax: %ignore bpnumber [count]")
+
+        if len(args) == 1:
+            num = args[0]
+            count = 0
+        else:
+            num, count = args
+
+        if count < 0:
+            return error("Count cannot be negative")
+
+        if not self.breakpoint_table.breakpoint_exists(num):
+            return error("Invalid breakpoint number:", num)
+
+        self.breakpoint_table.modify_breakpoints([num], ignore_count=count)
