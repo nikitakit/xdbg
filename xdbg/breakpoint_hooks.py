@@ -1,4 +1,10 @@
-import byteplay3 as bp
+import sys
+if sys.version_info < (3, 5):
+    raise NotImplementedError("xdbg only supports Python 3.5 and 3.6")
+elif sys.version_info < (3, 6):
+    from . import byteplay as bp
+else:
+    from . import wbyteplay as bp
 import inspect
 
 # %% base class for breakpoint tables

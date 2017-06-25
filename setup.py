@@ -11,6 +11,5 @@ setup(
     packages = find_packages(),
     install_requires=[
         "ipython",
-        "byteplay3",
     ]
 )

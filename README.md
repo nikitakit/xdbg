@@ -13,9 +13,8 @@ It is best used in combination with the [hydrogen package](https://github.com/nt
 ## Installation
 
 ### Dependencies
-* Python 3.5+
+* Python 3.5 or 3.6
 * IPython
-* byteplay3
 
 ### To Install
 
