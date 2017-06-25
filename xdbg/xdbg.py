@@ -92,7 +92,7 @@ class Debugger(Magics):
         self.shell.register_magics(self)
 
     @property
-    def main_module():
+    def main_module(self):
         return self.frame_tracker.main_module
 
     def print_breakpoints(self, enabled=None):
@@ -172,7 +172,7 @@ class Debugger(Magics):
                         print('{}  '.format(i), line, end='')
                     print()
                 else:
-                    add_breakpoint(self.breakpoint_table, func, lineno)
+                    num = add_breakpoint(self.breakpoint_table, func, lineno)
                     self.breakpoint_table.modify_breakpoints([num], temporary=temporary)
                     print('New breakpoint', num)
 
