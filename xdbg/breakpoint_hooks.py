@@ -82,6 +82,7 @@ def add_breakpoint_at(table, func, code, inject_index):
         (bp.RETURN_VALUE, None),
         (continue_label, None),
         (bp.POP_TOP, None), # pop unused return_value
+        (bp.POP_TOP, None), # pop module reference to do_hook_module
     ]
 
     return breakpoint_num
